@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: ieee-submission-checker
+    env: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: CHECKER_TOKEN
+        sync: false
+      - key: ALLOWED_HOSTS
+        value: mc.manuscriptcentral.com
+      - key: MAX_CHECK_MS
+        value: "90000"
+      - key: HEADLESS
+        value: "true"

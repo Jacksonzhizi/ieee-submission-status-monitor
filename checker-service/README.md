@@ -45,19 +45,45 @@ If `CHECKER_TOKEN` is set, the main app must send:
 Authorization: Bearer CHECKER_TOKEN
 ```
 
-## Deploy
+## Deploy on Render
 
-Railway or Render can deploy this directory directly. Use Docker if prompted.
-
-Set the service root directory to:
+Use this directory as the deployed service root:
 
 ```text
 checker-service
 ```
 
-After deployment, configure the main app:
+Render settings:
+
+- Environment: `Docker`
+- Dockerfile path: `./Dockerfile`
+- Docker context: `.`
+- Health check path: `/health`
+
+Environment variables:
+
+```bash
+CHECKER_TOKEN="TTVblhYE4ei_nuRPgDPzUVlyIcJEFkK7Pebl2ZBAcuk"
+ALLOWED_HOSTS="mc.manuscriptcentral.com"
+MAX_CHECK_MS="90000"
+HEADLESS="true"
+```
+
+After deployment, the health URL should return `{"ok":true}`:
+
+```text
+https://your-render-service.onrender.com/health
+```
+
+Then configure the main app:
 
 ```bash
 IEEE_CHECKER_ENDPOINT="https://your-service.example.com/check"
-IEEE_CHECKER_TOKEN="same value as CHECKER_TOKEN"
+IEEE_CHECKER_TOKEN="TTVblhYE4ei_nuRPgDPzUVlyIcJEFkK7Pebl2ZBAcuk"
 ```
+
+## Deploy on Railway
+
+Railway can also deploy this directory directly. Select Docker if prompted, set
+the service root directory to `checker-service`, and use the same environment
+variables listed above.
