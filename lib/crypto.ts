@@ -33,7 +33,7 @@ async function deriveKey(secret: string, salt: Uint8Array) {
     {
       name: "PBKDF2",
       salt,
-      iterations: 120000,
+      iterations: 100000,
       hash: "SHA-256",
     },
     material,
