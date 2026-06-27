@@ -337,7 +337,17 @@ async function collectPageText(page) {
     }
   }
 
-  return texts.join("\n\n");
+  if (texts.length > 0) return texts.join("\n\n");
+
+  try {
+    const html = await page.content();
+    return html
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ");
+  } catch {
+    return "";
+  }
 }
 
 async function collectAllOpenPageText(context) {
@@ -400,7 +410,7 @@ function extractStatus(text) {
   throw new Error(`Could not identify manuscript status. Page excerpt: ${compact}`);
 }
 
-async function checkSubmission(input) {
+async function launchBrowser() {
   const browser = await chromium.launch({
     headless,
     args: [
@@ -411,25 +421,103 @@ async function checkSubmission(input) {
     ],
   });
 
+  const context = await browser.newContext({
+    locale: "en-US",
+    viewport: { width: 1440, height: 1100 },
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    extraHTTPHeaders: {
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+  });
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+  });
+
+  return { browser, context };
+}
+
+async function summarizeContext(context) {
+  const pages = [];
+
+  for (const openPage of context.pages()) {
+    const frames = [];
+    for (const frame of openPage.frames()) {
+      let text = "";
+      let links = [];
+      let inputs = [];
+      try {
+        text = normalizeLine(await frame.locator("body").innerText({ timeout: 2000 })).slice(0, 1200);
+      } catch {
+        // Leave empty.
+      }
+      try {
+        links = await frame.evaluate(() =>
+          Array.from(document.querySelectorAll("a, button, input[type='submit'], input[type='button']"))
+            .map((element) => ({
+              tag: element.tagName.toLowerCase(),
+              text:
+                element.innerText ||
+                element.getAttribute("value") ||
+                element.getAttribute("title") ||
+                element.getAttribute("aria-label") ||
+                "",
+              href: element.getAttribute("href") || "",
+              id: element.id || "",
+              name: element.getAttribute("name") || "",
+            }))
+            .filter((item) => item.text || item.href || item.id || item.name)
+            .slice(0, 60)
+        );
+      } catch {
+        // Ignore inaccessible frames.
+      }
+      try {
+        inputs = await frame.evaluate(() =>
+          Array.from(document.querySelectorAll("input, select, textarea"))
+            .map((element) => ({
+              tag: element.tagName.toLowerCase(),
+              type: element.getAttribute("type") || "",
+              id: element.id || "",
+              name: element.getAttribute("name") || "",
+              autocomplete: element.getAttribute("autocomplete") || "",
+              placeholder: element.getAttribute("placeholder") || "",
+            }))
+            .slice(0, 60)
+        );
+      } catch {
+        // Ignore inaccessible frames.
+      }
+      frames.push({
+        url: frame.url(),
+        text,
+        links,
+        inputs,
+      });
+    }
+
+    pages.push({
+      url: openPage.url(),
+      title: await openPage.title().catch(() => ""),
+      frames,
+    });
+  }
+
+  return pages;
+}
+
+async function runSubmissionFlow(input, { debug = false } = {}) {
+  const { browser, context } = await launchBrowser();
+  const snapshots = [];
+
   try {
-    const context = await browser.newContext({
-      locale: "en-US",
-      viewport: { width: 1440, height: 1100 },
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-      extraHTTPHeaders: {
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
-    await context.addInitScript(() => {
-      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-    });
     const page = await context.newPage();
     page.setDefaultTimeout(15000);
 
     await page.goto(input.manuscriptUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => null);
     await waitForBotChallenge(page);
+    if (debug) snapshots.push({ stage: "opened", pages: await summarizeContext(context) });
 
     await clickIfVisible(page, [
       'button:has-text("Accept")',
@@ -439,6 +527,7 @@ async function checkSubmission(input) {
     ]);
 
     await fillLoginForm(page, input);
+    if (debug) snapshots.push({ stage: "after-login", pages: await summarizeContext(context) });
 
     if (await stillOnLoginPage(page)) {
       const excerpt = normalizeLine(await pageText(page)).slice(0, 700);
@@ -448,17 +537,35 @@ async function checkSubmission(input) {
     }
 
     const text = await visitLikelyStatusPages(page);
+    if (debug) snapshots.push({ stage: "after-author-navigation", pages: await summarizeContext(context) });
     const status = extractStatus(text);
 
-    return {
+    const result = {
       status,
       detail: `Detected on ${new URL(input.manuscriptUrl).hostname}`,
       rawExcerpt: normalizeLine(text).slice(0, 1000),
       checkedAt: new Date().toISOString(),
     };
+    if (debug) result.debug = snapshots;
+    return result;
+  } catch (error) {
+    if (debug) {
+      snapshots.push({ stage: "error", pages: await summarizeContext(context).catch(() => []) });
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : "Checker failed.",
+        debug: snapshots,
+      };
+    }
+
+    throw error;
   } finally {
     await browser.close();
   }
+}
+
+async function checkSubmission(input) {
+  return runSubmissionFlow(input);
 }
 
 function withTimeout(promise, milliseconds) {
@@ -478,6 +585,17 @@ app.post("/check", requireAuth, async (request, response) => {
   try {
     const input = validateInput(request.body);
     const result = await withTimeout(checkSubmission(input), maxCheckMs);
+    response.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Checker failed.";
+    response.status(500).json({ error: message });
+  }
+});
+
+app.post("/debug-check", requireAuth, async (request, response) => {
+  try {
+    const input = validateInput(request.body);
+    const result = await withTimeout(runSubmissionFlow(input, { debug: true }), maxCheckMs);
     response.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Checker failed.";
