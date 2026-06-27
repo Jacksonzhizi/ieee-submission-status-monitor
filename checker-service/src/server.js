@@ -15,6 +15,7 @@ const headless = process.env.HEADLESS !== "false";
 const challengeWaitMs = Number(process.env.CHALLENGE_WAIT_MS || 30000);
 
 const STATUS_PATTERNS = [
+  /\bawaiting\s+recommendation\b/i,
   /\bawaiting\b[^\n\r]{0,120}/i,
   /\bunder review\b[^\n\r]{0,80}/i,
   /\bwith (?:editor|administrator|reviewer)s?\b[^\n\r]{0,80}/i,
@@ -274,6 +275,8 @@ async function fillLoginForm(page, input) {
 
 async function visitLikelyStatusPages(page) {
   const candidates = [
+    'a:has-text("Author")',
+    'button:has-text("Author")',
     'a:has-text("Author Center")',
     'a:has-text("Author Dashboard")',
     'a:has-text("Submitted Manuscripts")',
@@ -315,7 +318,34 @@ function normalizeLine(line) {
   return line.replace(/\s+/g, " ").trim();
 }
 
+function extractStatusPhrase(text) {
+  const compact = normalizeLine(text);
+  const phrasePatterns = [
+    /\bAwaiting\s+Recommendation\b/i,
+    /\bAwaiting\s+Reviewer\s+Scores\b/i,
+    /\bAwaiting\s+Reviewer\s+Assignment\b/i,
+    /\bAwaiting\s+Admin\s+Processing\b/i,
+    /\bAwaiting\s+AE\s+Recommendation\b/i,
+    /\bAwaiting\s+EIC\s+Decision\b/i,
+    /\bRequired\s+Reviews\s+Completed\b/i,
+    /\bUnder\s+Review\b/i,
+    /\bWith\s+(?:Editor|Administrator|Reviewers?|Associate\s+Editor)\b/i,
+    /\b(?:Minor|Major)\s+Revision\b/i,
+    /\b(?:Accepted|Rejected)\b/i,
+  ];
+
+  for (const pattern of phrasePatterns) {
+    const match = compact.match(pattern);
+    if (match?.[0]) return normalizeLine(match[0]);
+  }
+
+  return null;
+}
+
 function extractStatus(text) {
+  const phraseStatus = extractStatusPhrase(text);
+  if (phraseStatus) return phraseStatus;
+
   const lines = text
     .split(/\r?\n/)
     .map(normalizeLine)
