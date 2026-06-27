@@ -135,17 +135,14 @@ async function clickAndFollow(page, locator) {
   const context = page.context();
   const popupPromise = context.waitForEvent("page", { timeout: 8000 }).catch(() => null);
 
-  await Promise.all([
-    page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => null),
-    locator.click({ timeout: 5000 }),
-  ]);
+  await locator.click({ timeout: 5000 });
 
   const popup = await popupPromise;
   const target = popup || page;
   await target.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => null);
   await target.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => null);
   await target.waitForTimeout(1000);
-  return target;
+  return bestContentPage(context, target);
 }
 
 async function firstVisibleWithin(root, selectors) {
@@ -199,6 +196,10 @@ async function waitAfterLoginSubmit(page) {
 
 async function submitLoginForm(page, passwordField, loginScope) {
   const submitSelectors = [
+    "#logInButton",
+    "a#logInButton",
+    '[id="logInButton"]',
+    'a:has-text("Log In")',
     'button[type="submit"]',
     'input[type="submit"]',
     'input[type="image"]',
@@ -211,11 +212,13 @@ async function submitLoginForm(page, passwordField, loginScope) {
     'button:has-text("Sign In")',
   ];
 
-  const submitButton = loginScope ? await firstVisibleWithin(loginScope, submitSelectors) : null;
+  const submitButton =
+    (loginScope ? await firstVisibleWithin(loginScope, submitSelectors) : null) ||
+    (await firstVisible(page, submitSelectors));
   if (submitButton) {
-    await submitButton.click({ timeout: 5000 });
-    await waitAfterLoginSubmit(page);
-    return "button";
+    const targetPage = await clickAndFollow(page, submitButton);
+    await waitAfterLoginSubmit(targetPage);
+    return targetPage;
   }
 
   const submitted = await passwordField.evaluate((element) => {
@@ -236,12 +239,12 @@ async function submitLoginForm(page, passwordField, loginScope) {
 
   if (submitted) {
     await waitAfterLoginSubmit(page);
-    return "form";
+    return bestContentPage(page.context(), page);
   }
 
   await passwordField.press("Enter");
   await waitAfterLoginSubmit(page);
-  return "enter";
+  return bestContentPage(page.context(), page);
 }
 
 async function fillLoginForm(page, input) {
@@ -287,11 +290,34 @@ async function fillLoginForm(page, input) {
   await usernameField.fill(input.username);
   await passwordField.fill(input.password);
 
-  await submitLoginForm(page, passwordField, loginScope);
+  return submitLoginForm(page, passwordField, loginScope);
+}
+
+async function bestContentPage(context, preferredPage = null) {
+  let best = preferredPage || context.pages()[0];
+  let bestScore = -1;
+
+  for (const openPage of context.pages()) {
+    const url = openPage.url();
+    const text = normalizeLine(await collectPageText(openPage));
+    const isBrowserError = /^chrome-error:|^about:blank$/i.test(url);
+    const score = (isBrowserError ? -10000 : 0) + text.length;
+
+    if (score > bestScore) {
+      best = openPage;
+      bestScore = score;
+    }
+  }
+
+  return best || preferredPage;
 }
 
 async function visitLikelyStatusPages(page) {
   const candidates = [
+    '#navAuthorCenter',
+    '#author',
+    '#Author',
+    '[id*="author" i]',
     'a:has-text("Author")',
     'button:has-text("Author")',
     'a:has-text("Author Center")',
@@ -444,12 +470,20 @@ async function summarizeContext(context) {
     const frames = [];
     for (const frame of openPage.frames()) {
       let text = "";
+      let htmlSample = "";
       let links = [];
       let inputs = [];
       try {
         text = normalizeLine(await frame.locator("body").innerText({ timeout: 2000 })).slice(0, 1200);
       } catch {
         // Leave empty.
+      }
+      if (!text) {
+        try {
+          htmlSample = normalizeLine((await frame.content()).slice(0, 1200));
+        } catch {
+          // Leave empty.
+        }
       }
       try {
         links = await frame.evaluate(() =>
@@ -491,6 +525,7 @@ async function summarizeContext(context) {
       frames.push({
         url: frame.url(),
         text,
+        htmlSample,
         links,
         inputs,
       });
@@ -511,7 +546,7 @@ async function runSubmissionFlow(input, { debug = false } = {}) {
   const snapshots = [];
 
   try {
-    const page = await context.newPage();
+    let page = await context.newPage();
     page.setDefaultTimeout(15000);
 
     await page.goto(input.manuscriptUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
@@ -526,7 +561,8 @@ async function runSubmissionFlow(input, { debug = false } = {}) {
       'a:has-text("I Agree")',
     ]);
 
-    await fillLoginForm(page, input);
+    page = await fillLoginForm(page, input);
+    page = await bestContentPage(context, page);
     if (debug) snapshots.push({ stage: "after-login", pages: await summarizeContext(context) });
 
     if (await stillOnLoginPage(page)) {
