@@ -173,6 +173,59 @@ async function stillOnLoginPage(page) {
   return /Log In|Reset Password|Create An Account|User ID/i.test(text) && !/Author Center|Submitted Manuscripts/i.test(text);
 }
 
+async function waitAfterLoginSubmit(page) {
+  await page.waitForLoadState("domcontentloaded", { timeout: 20000 }).catch(() => null);
+  await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => null);
+  await page.waitForTimeout(2500);
+}
+
+async function submitLoginForm(page, passwordField, loginScope) {
+  const submitSelectors = [
+    'button[type="submit"]',
+    'input[type="submit"]',
+    'input[type="image"]',
+    'input[type="button"][value*="Log" i]',
+    'input[type="button"][value*="Sign" i]',
+    'input[value*="Log In" i]',
+    'input[value*="Login" i]',
+    'button:has-text("Log In")',
+    'button:has-text("Login")',
+    'button:has-text("Sign In")',
+  ];
+
+  const submitButton = loginScope ? await firstVisibleWithin(loginScope, submitSelectors) : null;
+  if (submitButton) {
+    await submitButton.click({ timeout: 5000 });
+    await waitAfterLoginSubmit(page);
+    return "button";
+  }
+
+  const submitted = await passwordField.evaluate((element) => {
+    const input = element;
+    const form = input.form || input.closest("form");
+    if (!form) return false;
+
+    if (typeof form.requestSubmit === "function") {
+      form.requestSubmit();
+      return true;
+    }
+
+    const event = new Event("submit", { bubbles: true, cancelable: true });
+    const allowed = form.dispatchEvent(event);
+    if (allowed && typeof form.submit === "function") form.submit();
+    return true;
+  });
+
+  if (submitted) {
+    await waitAfterLoginSubmit(page);
+    return "form";
+  }
+
+  await passwordField.press("Enter");
+  await waitAfterLoginSubmit(page);
+  return "enter";
+}
+
 async function fillLoginForm(page, input) {
   await waitForBotChallenge(page);
 
@@ -216,25 +269,7 @@ async function fillLoginForm(page, input) {
   await usernameField.fill(input.username);
   await passwordField.fill(input.password);
 
-  const submitSelectors = [
-    'button[type="submit"]',
-    'input[type="submit"]',
-    'input[type="button"][value*="Log" i]',
-    'input[type="button"][value*="Sign" i]',
-    'button:has-text("Log In")',
-    'button:has-text("Login")',
-    'button:has-text("Sign In")',
-    'a:has-text("Log In")',
-    'a:has-text("Login")',
-  ];
-  const submitButton = loginScope ? await firstVisibleWithin(loginScope, submitSelectors) : null;
-  const clicked = submitButton
-    ? await submitButton.click({ timeout: 5000 }).then(() => true)
-    : await clickIfVisible(page, submitSelectors);
-
-  if (!clicked) {
-    await passwordField.press("Enter");
-  }
+  await submitLoginForm(page, passwordField, loginScope);
 }
 
 async function visitLikelyStatusPages(page) {
@@ -337,9 +372,6 @@ async function checkSubmission(input) {
     ]);
 
     await fillLoginForm(page, input);
-    await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => null);
-    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => null);
-    await page.waitForTimeout(2000);
 
     if (await stillOnLoginPage(page)) {
       const excerpt = normalizeLine(await pageText(page)).slice(0, 700);
