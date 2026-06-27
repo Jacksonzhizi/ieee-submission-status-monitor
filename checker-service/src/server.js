@@ -504,12 +504,6 @@ async function launchBrowser() {
   const context = await browser.newContext({
     locale: "en-US",
     viewport: { width: 1440, height: 1100 },
-    screen: { width: 1440, height: 1100 },
-    timezoneId: "America/New_York",
-    colorScheme: "light",
-    reducedMotion: "no-preference",
-    hasTouch: false,
-    deviceScaleFactor: 1,
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
     extraHTTPHeaders: {
@@ -518,8 +512,6 @@ async function launchBrowser() {
   });
   await context.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-    Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
-    Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
   });
 
   return { browser, context };
@@ -702,5 +694,5 @@ app.post("/debug-check", requireAuth, async (request, response) => {
 });
 
 app.listen(port, () => {
-  console.log(`IEEE checker service listening on ${port} (headless=${headless})`);
+  console.log(`IEEE checker service listening on ${port}`);
 });
