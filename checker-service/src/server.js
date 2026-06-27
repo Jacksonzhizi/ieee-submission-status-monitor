@@ -12,6 +12,7 @@ const allowedHosts = (process.env.ALLOWED_HOSTS || "mc.manuscriptcentral.com")
   .filter(Boolean);
 const maxCheckMs = Number(process.env.MAX_CHECK_MS || 90000);
 const headless = process.env.HEADLESS !== "false";
+const challengeWaitMs = Number(process.env.CHALLENGE_WAIT_MS || 30000);
 
 const STATUS_PATTERNS = [
   /\bawaiting\b[^\n\r]{0,120}/i,
@@ -65,9 +66,38 @@ function validateInput(body) {
   return { journalName, manuscriptUrl: url.toString(), username, password };
 }
 
-async function firstVisible(page, selectors) {
+function isBotChallengeText(text) {
+  return /just a moment|verify you are human|checking your browser|challenge-error-text|cloudflare/i.test(text);
+}
+
+async function pageText(page) {
+  try {
+    return await page.locator("body").innerText({ timeout: 5000 });
+  } catch {
+    return "";
+  }
+}
+
+async function waitForBotChallenge(page) {
+  const started = Date.now();
+
+  while (Date.now() - started < challengeWaitMs) {
+    const text = await pageText(page);
+    if (!isBotChallengeText(text)) return;
+    await page.waitForTimeout(2500);
+    await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => null);
+    await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => null);
+  }
+
+  const excerpt = normalizeLine(await pageText(page)).slice(0, 500);
+  throw new Error(
+    `ScholarOne blocked the automated browser with a Cloudflare challenge. Page excerpt: ${excerpt}`
+  );
+}
+
+async function firstVisibleInFrame(frame, selectors) {
   for (const selector of selectors) {
-    const locator = page.locator(selector).first();
+    const locator = frame.locator(selector).first();
     try {
       if ((await locator.count()) > 0 && (await locator.isVisible({ timeout: 1500 }))) {
         return locator;
@@ -75,6 +105,19 @@ async function firstVisible(page, selectors) {
     } catch {
       // Keep trying the next selector.
     }
+  }
+
+  return null;
+}
+
+async function firstVisible(page, selectors) {
+  const pageLocator = await firstVisibleInFrame(page, selectors);
+  if (pageLocator) return pageLocator;
+
+  for (const frame of page.frames()) {
+    if (frame === page.mainFrame()) continue;
+    const frameLocator = await firstVisibleInFrame(frame, selectors);
+    if (frameLocator) return frameLocator;
   }
 
   return null;
@@ -88,12 +131,21 @@ async function clickIfVisible(page, selectors) {
 }
 
 async function fillLoginForm(page, input) {
+  await waitForBotChallenge(page);
+
   const usernameField = await firstVisible(page, [
     'input[name="USERID"]',
     'input[name="UserID"]',
+    'input[name="login"]',
+    'input[name="email"]',
     'input[name="username"]',
+    'input[name*="user" i]',
+    'input[name*="email" i]',
+    'input[id*="login" i]',
     'input[id*="USER" i]',
     'input[id*="user" i]',
+    'input[id*="email" i]',
+    'input[autocomplete="username"]',
     'input[type="email"]',
     'input[type="text"]',
   ]);
@@ -102,13 +154,16 @@ async function fillLoginForm(page, input) {
     'input[name="PASSWORD"]',
     'input[name="Password"]',
     'input[name="password"]',
+    'input[name*="pass" i]',
     'input[id*="PASS" i]',
     'input[id*="pass" i]',
+    'input[autocomplete="current-password"]',
     'input[type="password"]',
   ]);
 
   if (!usernameField || !passwordField) {
-    throw new Error("Could not find ScholarOne login fields.");
+    const excerpt = normalizeLine(await pageText(page)).slice(0, 500);
+    throw new Error(`Could not find ScholarOne login fields. Page excerpt: ${excerpt}`);
   }
 
   await usernameField.fill(input.username);
@@ -193,19 +248,33 @@ function extractStatus(text) {
 async function checkSubmission(input) {
   const browser = await chromium.launch({
     headless,
-    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+    args: [
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-blink-features=AutomationControlled",
+      "--disable-features=IsolateOrigins,site-per-process",
+    ],
   });
 
   try {
     const context = await browser.newContext({
       locale: "en-US",
       viewport: { width: 1440, height: 1100 },
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      extraHTTPHeaders: {
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
     });
     const page = await context.newPage();
     page.setDefaultTimeout(15000);
 
     await page.goto(input.manuscriptUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => null);
+    await waitForBotChallenge(page);
 
     await clickIfVisible(page, [
       'button:has-text("Accept")',
