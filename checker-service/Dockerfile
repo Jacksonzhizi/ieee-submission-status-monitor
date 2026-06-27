@@ -6,7 +6,7 @@ COPY package*.json ./
 RUN npm install --omit=dev
 RUN npx playwright install --with-deps chromium
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends xvfb \
+  && apt-get install -y --no-install-recommends xvfb xauth \
   && rm -rf /var/lib/apt/lists/*
 
 COPY src ./src
