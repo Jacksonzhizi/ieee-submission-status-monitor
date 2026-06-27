@@ -131,6 +131,23 @@ async function clickIfVisible(page, selectors) {
   return true;
 }
 
+async function clickAndFollow(page, locator) {
+  const context = page.context();
+  const popupPromise = context.waitForEvent("page", { timeout: 8000 }).catch(() => null);
+
+  await Promise.all([
+    page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => null),
+    locator.click({ timeout: 5000 }),
+  ]);
+
+  const popup = await popupPromise;
+  const target = popup || page;
+  await target.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => null);
+  await target.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => null);
+  await target.waitForTimeout(1000);
+  return target;
+}
+
 async function firstVisibleWithin(root, selectors) {
   for (const selector of selectors) {
     const locator = root.locator(selector).first();
@@ -285,19 +302,16 @@ async function visitLikelyStatusPages(page) {
     'a:has-text("Awaiting Revision")',
   ];
 
+  let currentPage = page;
   const snapshots = [];
-  snapshots.push(await collectPageText(page));
+  snapshots.push(await collectAllOpenPageText(page.context()));
 
   for (const selector of candidates) {
-    const link = page.locator(selector).first();
+    const link = await firstVisible(currentPage, [selector]);
     try {
-      if ((await link.count()) === 0 || !(await link.isVisible({ timeout: 1000 }))) continue;
-      await Promise.all([
-        page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => null),
-        link.click({ timeout: 5000 }),
-      ]);
-      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => null);
-      snapshots.push(await collectPageText(page));
+      if (!link) continue;
+      currentPage = await clickAndFollow(currentPage, link);
+      snapshots.push(await collectAllOpenPageText(currentPage.context()));
     } catch {
       // ScholarOne pages vary by journal; continue with other likely links.
     }
@@ -307,11 +321,34 @@ async function visitLikelyStatusPages(page) {
 }
 
 async function collectPageText(page) {
-  return page.evaluate(() => {
-    const removable = document.querySelectorAll("script, style, noscript, svg");
-    removable.forEach((node) => node.remove());
-    return document.body?.innerText || "";
-  });
+  const texts = [];
+
+  for (const frame of page.frames()) {
+    try {
+      const text = await frame.locator("body").innerText({ timeout: 3000 });
+      if (normalizeLine(text)) texts.push(text);
+    } catch {
+      try {
+        const text = await frame.evaluate(() => document.body?.innerText || "");
+        if (normalizeLine(text)) texts.push(text);
+      } catch {
+        // Ignore frames that cannot be inspected.
+      }
+    }
+  }
+
+  return texts.join("\n\n");
+}
+
+async function collectAllOpenPageText(context) {
+  const texts = [];
+
+  for (const openPage of context.pages()) {
+    const text = await collectPageText(openPage);
+    if (normalizeLine(text)) texts.push(text);
+  }
+
+  return texts.join("\n\n");
 }
 
 function normalizeLine(line) {
