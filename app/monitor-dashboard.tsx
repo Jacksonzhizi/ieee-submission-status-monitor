@@ -55,8 +55,8 @@ export default function MonitorDashboard() {
     notifyEmail: "2598900488@qq.com",
   });
 
-  const systemsCount = useMemo(
-    () => monitors.filter((monitor) => monitor.journal_slug === "systems").length,
+  const journalCount = useMemo(
+    () => new Set(monitors.map((monitor) => monitor.journal_slug)).size,
     [monitors]
   );
 
@@ -162,8 +162,8 @@ export default function MonitorDashboard() {
               <div className="text-xs text-[#60705f]">监控任务</div>
             </div>
             <div className="border border-[#d9ded4] bg-white px-4 py-3">
-              <div className="text-2xl font-semibold">{systemsCount}</div>
-              <div className="text-xs text-[#60705f]">SMC Systems</div>
+              <div className="text-2xl font-semibold">{journalCount}</div>
+              <div className="text-xs text-[#60705f]">期刊种类</div>
             </div>
             <div className="border border-[#d9ded4] bg-white px-4 py-3">
               <div className="text-2xl font-semibold">08:00</div>

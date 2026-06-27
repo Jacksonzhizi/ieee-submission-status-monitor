@@ -17,11 +17,18 @@ const challengeWaitMs = Number(process.env.CHALLENGE_WAIT_MS || 30000);
 const STATUS_PATTERNS = [
   /\bawaiting\s+recommendation\b/i,
   /\bawaiting\b[^\n\r]{0,120}/i,
+  /\bsubmitted\b[^\n\r]{0,80}/i,
+  /\bin review\b[^\n\r]{0,80}/i,
   /\bunder review\b[^\n\r]{0,80}/i,
   /\bwith (?:editor|administrator|reviewer)s?\b[^\n\r]{0,80}/i,
+  /\beditor assigned\b[^\n\r]{0,80}/i,
   /\breviewers? assigned\b[^\n\r]{0,80}/i,
   /\brequired reviews? completed\b[^\n\r]{0,80}/i,
+  /\breviews? completed\b[^\n\r]{0,80}/i,
   /\bdecision\b[^\n\r]{0,100}/i,
+  /\bawaiting decision\b[^\n\r]{0,80}/i,
+  /\brevisions? required\b[^\n\r]{0,80}/i,
+  /\binvited revision\b[^\n\r]{0,80}/i,
   /\bminor revision\b[^\n\r]{0,80}/i,
   /\bmajor revision\b[^\n\r]{0,80}/i,
   /\baccept(?:ed)?\b[^\n\r]{0,80}/i,
@@ -323,6 +330,7 @@ async function visitLikelyStatusPages(page) {
     'a:has-text("Author Center")',
     'a:has-text("Author Dashboard")',
     'a:has-text("Submitted Manuscripts")',
+    'a:has-text("Manuscripts I Have Co-Authored")',
     'a:has-text("Manuscripts with Decisions")',
     'a:has-text("Manuscripts in Review")',
     'a:has-text("Awaiting Revision")',
@@ -391,6 +399,40 @@ function normalizeLine(line) {
   return line.replace(/\s+/g, " ").trim();
 }
 
+function cleanStatusLine(line) {
+  return normalizeLine(line)
+    .replace(/^[•·\-\u2022\s]+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isLikelyStatusText(line) {
+  return STATUS_PATTERNS.some((pattern) => pattern.test(line));
+}
+
+function isInstructionalStatusText(line) {
+  return /attention authors|site is no longer|new submissions|currently under review|please visit|author portal|submit your manuscript/i.test(line);
+}
+
+function extractStatusFromScholarOneDashboard(text) {
+  const lines = text
+    .split(/\r?\n/)
+    .map(normalizeLine)
+    .filter(Boolean);
+
+  const statusHeaderIndex = lines.findIndex((line) => /\bSTATUS\b/i.test(line) && /\bID\b/i.test(line));
+  if (statusHeaderIndex === -1) return null;
+
+  const tableLines = lines.slice(statusHeaderIndex + 1, statusHeaderIndex + 80);
+  for (const line of tableLines) {
+    const status = cleanStatusLine(line);
+    if (!status || isInstructionalStatusText(status)) continue;
+    if (isLikelyStatusText(status)) return status;
+  }
+
+  return null;
+}
+
 function extractStatusPhrase(text) {
   const compact = normalizeLine(text);
   const phrasePatterns = [
@@ -400,9 +442,16 @@ function extractStatusPhrase(text) {
     /\bAwaiting\s+Admin\s+Processing\b/i,
     /\bAwaiting\s+AE\s+Recommendation\b/i,
     /\bAwaiting\s+EIC\s+Decision\b/i,
+    /\bAwaiting\s+Decision\b/i,
     /\bRequired\s+Reviews\s+Completed\b/i,
+    /\bReviews?\s+Completed\b/i,
+    /\bSubmitted\b/i,
+    /\bIn\s+Review\b/i,
     /\bUnder\s+Review\b/i,
+    /\bEditor\s+Assigned\b/i,
     /\bWith\s+(?:Editor|Administrator|Reviewers?|Associate\s+Editor)\b/i,
+    /\bRevisions?\s+Required\b/i,
+    /\bInvited\s+Revision\b/i,
     /\b(?:Minor|Major)\s+Revision\b/i,
     /\b(?:Accepted|Rejected)\b/i,
   ];
@@ -416,21 +465,26 @@ function extractStatusPhrase(text) {
 }
 
 function extractStatus(text) {
-  const phraseStatus = extractStatusPhrase(text);
-  if (phraseStatus) return phraseStatus;
+  const dashboardStatus = extractStatusFromScholarOneDashboard(text);
+  if (dashboardStatus) return dashboardStatus;
 
   const lines = text
     .split(/\r?\n/)
     .map(normalizeLine)
     .filter((line) => line.length >= 4 && line.length <= 220);
 
-  const statusLabelLine = lines.find((line) => /status/i.test(line) && STATUS_PATTERNS.some((pattern) => pattern.test(line)));
-  if (statusLabelLine) return statusLabelLine;
+  const statusLabelLine = lines.find(
+    (line) => /status/i.test(line) && isLikelyStatusText(line) && !isInstructionalStatusText(line)
+  );
+  if (statusLabelLine) return cleanStatusLine(statusLabelLine);
 
   for (const pattern of STATUS_PATTERNS) {
-    const line = lines.find((candidate) => pattern.test(candidate));
-    if (line) return line;
+    const line = lines.find((candidate) => pattern.test(candidate) && !isInstructionalStatusText(candidate));
+    if (line) return cleanStatusLine(line);
   }
+
+  const phraseStatus = extractStatusPhrase(text);
+  if (phraseStatus) return phraseStatus;
 
   const compact = normalizeLine(text).slice(0, 1000);
   throw new Error(`Could not identify manuscript status. Page excerpt: ${compact}`);

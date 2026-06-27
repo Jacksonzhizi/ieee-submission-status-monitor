@@ -15,10 +15,24 @@ const KNOWN_IEEE_JOURNALS: Array<{
   },
 ];
 
+function slugFromExplicitUrl(explicitUrl?: string) {
+  if (!explicitUrl?.trim()) return null;
+
+  try {
+    const url = new URL(explicitUrl.trim());
+    const pathSlug = url.pathname.split("/").filter(Boolean).at(-1);
+    return pathSlug || url.hostname.replace(/^mc\./i, "").split(".")[0] || null;
+  } catch {
+    return null;
+  }
+}
+
 export function resolveJournal(inputName: string, explicitUrl?: string) {
   const journalName = inputName.trim();
   const known = KNOWN_IEEE_JOURNALS.find((item) => item.match.test(journalName));
+  const explicitSlug = slugFromExplicitUrl(explicitUrl);
   const slug =
+    explicitSlug ??
     known?.slug ??
     journalName
       .toLowerCase()
