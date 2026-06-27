@@ -130,10 +130,65 @@ async function clickIfVisible(page, selectors) {
   return true;
 }
 
+async function firstVisibleWithin(root, selectors) {
+  for (const selector of selectors) {
+    const locator = root.locator(selector).first();
+    try {
+      if ((await locator.count()) > 0 && (await locator.isVisible({ timeout: 1000 }))) {
+        return locator;
+      }
+    } catch {
+      // Keep trying the next selector.
+    }
+  }
+
+  return null;
+}
+
+async function loginScopeForPassword(passwordField) {
+  const scopes = [
+    passwordField.locator("xpath=ancestor::form[1]"),
+    passwordField.locator("xpath=ancestor::*[contains(@class, 'login')][1]"),
+    passwordField.locator("xpath=ancestor::*[contains(@id, 'login')][1]"),
+    passwordField.locator("xpath=ancestor::table[1]"),
+    passwordField.locator("xpath=ancestor::div[1]"),
+  ];
+
+  for (const scope of scopes) {
+    try {
+      if ((await scope.count()) > 0) return scope.first();
+    } catch {
+      // Keep trying broader scopes.
+    }
+  }
+
+  return null;
+}
+
+async function stillOnLoginPage(page) {
+  const hasPassword = await firstVisible(page, ['input[type="password"]']);
+  if (hasPassword) return true;
+
+  const text = normalizeLine(await pageText(page));
+  return /Log In|Reset Password|Create An Account|User ID/i.test(text) && !/Author Center|Submitted Manuscripts/i.test(text);
+}
+
 async function fillLoginForm(page, input) {
   await waitForBotChallenge(page);
 
-  const usernameField = await firstVisible(page, [
+  const passwordField = await firstVisible(page, [
+    'input[name="PASSWORD"]',
+    'input[name="Password"]',
+    'input[name="password"]',
+    'input[name*="pass" i]',
+    'input[id*="PASS" i]',
+    'input[id*="pass" i]',
+    'input[autocomplete="current-password"]',
+    'input[type="password"]',
+  ]);
+
+  const loginScope = passwordField ? await loginScopeForPassword(passwordField) : null;
+  const usernameSelectors = [
     'input[name="USERID"]',
     'input[name="UserID"]',
     'input[name="login"]',
@@ -148,18 +203,10 @@ async function fillLoginForm(page, input) {
     'input[autocomplete="username"]',
     'input[type="email"]',
     'input[type="text"]',
-  ]);
-
-  const passwordField = await firstVisible(page, [
-    'input[name="PASSWORD"]',
-    'input[name="Password"]',
-    'input[name="password"]',
-    'input[name*="pass" i]',
-    'input[id*="PASS" i]',
-    'input[id*="pass" i]',
-    'input[autocomplete="current-password"]',
-    'input[type="password"]',
-  ]);
+  ];
+  const usernameField =
+    (loginScope ? await firstVisibleWithin(loginScope, usernameSelectors) : null) ||
+    (await firstVisible(page, usernameSelectors));
 
   if (!usernameField || !passwordField) {
     const excerpt = normalizeLine(await pageText(page)).slice(0, 500);
@@ -169,15 +216,21 @@ async function fillLoginForm(page, input) {
   await usernameField.fill(input.username);
   await passwordField.fill(input.password);
 
-  const clicked = await clickIfVisible(page, [
+  const submitSelectors = [
     'button[type="submit"]',
     'input[type="submit"]',
+    'input[type="button"][value*="Log" i]',
+    'input[type="button"][value*="Sign" i]',
     'button:has-text("Log In")',
     'button:has-text("Login")',
     'button:has-text("Sign In")',
     'a:has-text("Log In")',
     'a:has-text("Login")',
-  ]);
+  ];
+  const submitButton = loginScope ? await firstVisibleWithin(loginScope, submitSelectors) : null;
+  const clicked = submitButton
+    ? await submitButton.click({ timeout: 5000 }).then(() => true)
+    : await clickIfVisible(page, submitSelectors);
 
   if (!clicked) {
     await passwordField.press("Enter");
@@ -286,6 +339,14 @@ async function checkSubmission(input) {
     await fillLoginForm(page, input);
     await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => null);
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => null);
+    await page.waitForTimeout(2000);
+
+    if (await stillOnLoginPage(page)) {
+      const excerpt = normalizeLine(await pageText(page)).slice(0, 700);
+      throw new Error(
+        `ScholarOne login did not complete. Please verify the User ID and password, or check whether ScholarOne requires a manual login step. Page excerpt: ${excerpt}`
+      );
+    }
 
     const text = await visitLikelyStatusPages(page);
     const status = extractStatus(text);
