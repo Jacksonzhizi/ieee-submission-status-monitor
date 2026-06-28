@@ -42,6 +42,12 @@ function formatTime(value: string | null) {
   }).format(new Date(value));
 }
 
+function eventSource(detail: string | null) {
+  if (!detail) return "检测";
+  const [source] = detail.split("：");
+  return source || "检测";
+}
+
 export default function MonitorDashboard() {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [events, setEvents] = useState<Record<string, StatusEvent[]>>({});
@@ -314,17 +320,19 @@ export default function MonitorDashboard() {
                 ) : null}
 
                 <div className="mt-5 overflow-hidden border border-[#edf0ea]">
-                  <div className="grid grid-cols-[1fr_1fr_1fr] bg-[#f7f8f5] px-3 py-2 text-xs font-semibold text-[#60705f]">
+                  <div className="grid grid-cols-[0.9fr_0.8fr_1fr_1fr] bg-[#f7f8f5] px-3 py-2 text-xs font-semibold text-[#60705f]">
                     <span>检测时间</span>
+                    <span>来源</span>
                     <span>原状态</span>
                     <span>当前状态</span>
                   </div>
                   {(events[monitor.id] || []).slice(0, 5).map((event) => (
                     <div
                       key={event.id}
-                      className="grid grid-cols-[1fr_1fr_1fr] border-t border-[#edf0ea] px-3 py-2 text-sm"
+                      className="grid grid-cols-[0.9fr_0.8fr_1fr_1fr] border-t border-[#edf0ea] px-3 py-2 text-sm"
                     >
                       <span>{formatTime(event.checked_at)}</span>
+                      <span>{eventSource(event.detail)}</span>
                       <span>{event.previous_status || "首次检测"}</span>
                       <span>{event.current_status}</span>
                     </div>

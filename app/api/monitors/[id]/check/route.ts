@@ -9,7 +9,7 @@ function toError(error: unknown) {
 export async function POST(_: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;
-    const result = await runMonitorCheck(env as RuntimeEnv, id);
+    const result = await runMonitorCheck(env as RuntimeEnv, id, { source: "手动检测" });
     return Response.json({ result });
   } catch (error) {
     return Response.json({ error: toError(error) }, { status: 500 });

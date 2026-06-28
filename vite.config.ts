@@ -29,6 +29,9 @@ const localBindingConfig = {
         },
       ]
     : [],
+  triggers: {
+    crons: ["0 0 * * *"],
+  },
 };
 
 export default defineConfig({

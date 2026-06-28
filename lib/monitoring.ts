@@ -12,6 +12,11 @@ function id(prefix: string) {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
 }
 
+function detailWithSource(detail: string | undefined, source: string) {
+  const suffix = detail?.trim() || "检测完成";
+  return `${source}：${suffix}`;
+}
+
 function requireDb(env: RuntimeEnv) {
   if (!env.DB) throw new Error("D1 数据库未绑定。请在 .openai/hosting.json 中保持 d1 为 DB。");
   return env.DB;
@@ -117,7 +122,11 @@ export async function listEvents(env: RuntimeEnv, monitorId: string) {
   return results;
 }
 
-export async function runMonitorCheck(env: RuntimeEnv, monitorId: string) {
+export async function runMonitorCheck(
+  env: RuntimeEnv,
+  monitorId: string,
+  options: { source?: string } = {}
+) {
   await ensureSchema(env);
   const monitor = await getMonitor(env, monitorId);
   const password = await decryptPassword(
@@ -133,6 +142,8 @@ export async function runMonitorCheck(env: RuntimeEnv, monitorId: string) {
     password,
   });
   const checkedAt = checked.checkedAt || nowIso();
+  const checkSource = options.source || "手动检测";
+  const detail = detailWithSource(checked.detail, checkSource);
   const previousStatus = monitor.last_status;
   const changed = previousStatus !== checked.status;
   const eventId = id("evt");
@@ -146,7 +157,7 @@ export async function runMonitorCheck(env: RuntimeEnv, monitorId: string) {
       manuscriptUrl: monitor.manuscript_url,
       previousStatus,
       currentStatus: checked.status,
-      detail: checked.detail,
+      detail,
       checkedAt,
     });
     notificationSentAt = notification.sent ? nowIso() : null;
@@ -163,7 +174,7 @@ export async function runMonitorCheck(env: RuntimeEnv, monitorId: string) {
         monitor.id,
         previousStatus,
         checked.status,
-        checked.detail || null,
+        detail,
         checked.rawExcerpt || null,
         checkedAt,
         notificationSentAt,
@@ -175,7 +186,7 @@ export async function runMonitorCheck(env: RuntimeEnv, monitorId: string) {
       )
       .bind(
         checked.status,
-        checked.detail || null,
+        detail,
         checkedAt,
         changed ? 1 : 0,
         changed ? checkedAt : null,
@@ -189,7 +200,7 @@ export async function runMonitorCheck(env: RuntimeEnv, monitorId: string) {
     changed,
     previousStatus,
     currentStatus: checked.status,
-    detail: checked.detail || null,
+    detail,
     checkedAt,
     notificationSentAt,
     notificationError,
@@ -205,7 +216,7 @@ export async function runDailyChecks(env: RuntimeEnv) {
   const output = [];
   for (const row of results) {
     try {
-      output.push(await runMonitorCheck(env, row.id));
+      output.push(await runMonitorCheck(env, row.id, { source: "自动检测" }));
     } catch (error) {
       output.push({
         monitorId: row.id,
