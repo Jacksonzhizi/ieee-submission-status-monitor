@@ -17,6 +17,16 @@ function detailWithSource(detail: string | undefined, source: string) {
   return `${source}：${suffix}`;
 }
 
+function sleep(milliseconds: number) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function envNumber(value: string | undefined, fallback: number) {
+  if (!value) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 function requireDb(env: RuntimeEnv) {
   if (!env.DB) throw new Error("D1 数据库未绑定。请在 .openai/hosting.json 中保持 d1 为 DB。");
   return env.DB;
@@ -213,15 +223,24 @@ export async function runDailyChecks(env: RuntimeEnv) {
     .prepare("SELECT id FROM monitors WHERE enabled = 1 ORDER BY created_at ASC")
     .all<{ id: string }>();
 
+  const delayMs = envNumber(env.DAILY_CHECK_DELAY_MS, 8000);
   const output = [];
-  for (const row of results) {
+  for (const [index, row] of results.entries()) {
     try {
-      output.push(await runMonitorCheck(env, row.id, { source: "自动检测" }));
+      output.push(
+        await runMonitorCheck(env, row.id, {
+          source: `自动检测 ${index + 1}/${results.length}`,
+        })
+      );
     } catch (error) {
       output.push({
         monitorId: row.id,
         error: error instanceof Error ? error.message : "检测失败",
       });
+    }
+
+    if (delayMs > 0 && index < results.length - 1) {
+      await sleep(delayMs);
     }
   }
 

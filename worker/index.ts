@@ -20,6 +20,7 @@ interface Env {
   MAIL_FROM?: string;
   IEEE_CHECKER_ENDPOINT?: string;
   IEEE_CHECKER_TOKEN?: string;
+  DAILY_CHECK_DELAY_MS?: string;
 }
 
 interface ExecutionContext {
